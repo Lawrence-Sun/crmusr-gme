@@ -319,6 +319,7 @@ public:
     std::tuple<double, double, double> generator(TRandom &random, double Pmu);
     TH1D getSimulatedMichel(std::string inputFile);
     TH1D generatePolarization(std::string polarizationFile, double KPiRatio, bool charge);
+    TH1D generateSinglePolarization(string polarizationFileName, int parentOption, bool charge);
 
     TH1D PmuMichelDis(double KPiRatio, bool charge, int numEvents, std::string polarizationFile); // generate the polarization distribution of the Michel electrons in a certain Pmu
     TH1D IsotropyDis(int numEvents);                                                              // generate the isotropy distribution of the Michel electrons
