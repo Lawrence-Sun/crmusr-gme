@@ -324,6 +324,7 @@ public:
     TH1D PmuMichelDis(double KPiRatio, bool charge, int numEvents, std::string polarizationFile); // generate the polarization distribution of the Michel electrons in a certain Pmu
     TH1D IsotropyDis(int numEvents);                                                              // generate the isotropy distribution of the Michel electrons
     TH2D PmuMichelDis2D(double KPiRatio, bool charge, int numEvents, std::string polarizationFile);
+    TH1D getSingleParentMuon(int parentOption, int division, bool charge, std::string inputFile);
 };
 
 double GenMichel::getWeight(double alpha, double Pmu, double cosTheta, double phi)
@@ -369,7 +370,7 @@ TH1D GenMichel::getSimulatedMichel(std::string inputFile)
     // ROOT::RDataFrame simulatedMichelData("Michel Momentum Direction", "/Users/sunmingchen/RawData/simulationMichel.root");
     ROOT::RDataFrame simulatedMichelData("Michel Momentum Direction", inputFile.c_str());
 
-    TH1D simulatedMichel("simulatedMichel", "simulatedMichel", 100, -1, 1);
+    TH1D simulatedMichel("simulatedMichel", "simulatedMichel", 1000, -1, 1);
 
     simulatedMichelData.Foreach([&simulatedMichel](double momentumX, double momentumY, double momentumZ)
                                 { 
@@ -427,7 +428,7 @@ TH1D GenMichel::PmuMichelDis(double KPiRatio, bool charge, int numEvents, std::s
         HistID += "Muon";
     }
 
-    TH1D pmuMichelDis(HistID.c_str(), HistID.c_str(), 100, -1, 1);
+    TH1D pmuMichelDis(HistID.c_str(), HistID.c_str(), 1000, -1, 1);
 
     TRandom random(time(0));
     auto polarizationHist = generatePolarization(polarizationFile, KPiRatio, charge);
@@ -458,7 +459,7 @@ TH2D GenMichel::PmuMichelDis2D(double KPiRatio, bool charge, int numEvents, std:
         HistID += "Muon";
     }
 
-    TH2D pmuMichelDis(HistID.c_str(), HistID.c_str(), 100, 0, 2 * TMath::Pi(), 100, -1, 1);
+    TH2D pmuMichelDis(HistID.c_str(), HistID.c_str(), 1000, 0, 2 * TMath::Pi(), 1000, -1, 1);
 
     TRandom random(time(0));
     auto polarizationHist = generatePolarization(polarizationFile, KPiRatio, charge);
@@ -479,7 +480,7 @@ TH2D GenMichel::PmuMichelDis2D(double KPiRatio, bool charge, int numEvents, std:
 
 TH1D GenMichel::IsotropyDis(int numEvents)
 {
-    TH1D isotropyDis("IsotropyDis", "IsotropyDis", 100, -1, 1);
+    TH1D isotropyDis("IsotropyDis", "IsotropyDis", 1000, -1, 1);
     TRandom random(time(0));
 
     for (int i = 0; i < numEvents; i++)
@@ -491,6 +492,88 @@ TH1D GenMichel::IsotropyDis(int numEvents)
     }
 
     return isotropyDis;
+}
+
+TH1D GenMichel::generateSinglePolarization(string polarizationFileName, int parentOption, bool charge)
+{
+    TFile polarizationFile(polarizationFileName.c_str(), "READ");
+    string parent, son;
+    if (charge)
+    {
+        son = "AntiMuon";
+    }
+    else
+    {
+        son = "Muon";
+    }
+
+    if (parentOption == 0)
+    {
+        parent = "pi";
+    }
+    else if (parentOption == 1)
+    {
+        parent = "K";
+    }
+    else if (parentOption == 2)
+    {
+        parent = "KLong";
+    }
+
+    string histName = parent + son + "Pmu";
+    TH1D outputHist(parent.c_str(), parent.c_str(), 1000, -1, 1);
+
+    auto polarizationHist = (TH1D *)polarizationFile.Get(histName.c_str());
+
+    outputHist.Add(polarizationHist);
+
+    return outputHist;
+}
+
+TH1D GenMichel::getSingleParentMuon(int parentOption, int division, bool charge, std::string inputFile)
+{
+    string parent, son;
+    if (charge)
+    {
+        son = "AntiMuon";
+    }
+    else
+    {
+        son = "Muon";
+    }
+
+    if (parentOption == 0)
+    {
+        parent = "pi";
+    }
+    else if (parentOption == 1)
+    {
+        parent = "K";
+    }
+    else if (parentOption == 2)
+    {
+        parent = "KLong";
+    }
+
+    string HistID = parent + son;
+
+    TH1D MichelDis(HistID.c_str(), HistID.c_str(), 1000, -1, 1);
+
+    auto polarizationHist = generateSinglePolarization(inputFile, parentOption, charge);
+
+    TRandom random(time(0));
+    for (int i = 0; i < division; i++)
+    {
+        double Pmu = polarizationHist.GetRandom();
+
+        auto coordinateTuple = generator(random, Pmu);
+        double cosTheta = std::get<0>(coordinateTuple);
+        double weight = std::get<2>(coordinateTuple);
+
+        MichelDis.Fill(cosTheta, weight);
+    }
+
+    return MichelDis;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////
