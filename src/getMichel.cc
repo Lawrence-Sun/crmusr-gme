@@ -521,7 +521,7 @@ TH1D GenMichel::generateSinglePolarization(string polarizationFileName, int pare
     }
 
     string histName = parent + son + "Pmu";
-    TH1D outputHist(parent.c_str(), parent.c_str(), 1000, -1, 1);
+    TH1D outputHist(parent.c_str(), parent.c_str(), 100, -1, 1);
 
     auto polarizationHist = (TH1D *)polarizationFile.Get(histName.c_str());
 
@@ -557,7 +557,7 @@ TH1D GenMichel::getSingleParentMuon(int parentOption, int division, bool charge,
 
     string HistID = parent + son;
 
-    TH1D MichelDis(HistID.c_str(), HistID.c_str(), 1000, -1, 1);
+    TH1D MichelDis(HistID.c_str(), HistID.c_str(), 100, -1, 1);
 
     auto polarizationHist = generateSinglePolarization(inputFile, parentOption, charge);
 
