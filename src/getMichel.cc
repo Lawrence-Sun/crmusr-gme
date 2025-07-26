@@ -56,10 +56,10 @@ public:
     void FillTheTTree(TTree *tree, std::map<int, std::map<int, muonDataFormat>> muonDataForm, muonDataFormat &aMuonData); // fill the TTree with muon and parent particle data
     void findRelationPanM(std::string protonProducedData, std::string heliumProducedData, std::string muonDataFile);      // pick up all muon data from raw data file
 
-    std::__1::pair<TH1D *, TH1D *> getPAndHeHist(ROOT::RDataFrame &p2MuonDataFrame, ROOT::RDataFrame &he2MuonDataFrame, float energyFloor, float energyCeil, std::string headerOfTH1D, int parentID); // get the proton and helium polarization distribution and mix together
-    void TH1DDrawing(TH1D *hist, std::string xTitle, std::string yTitle);                                                                                                                             // TH1D drawing function
-    void findCertainEnergyRangePolarization(std::string muonDataFile, std::string polarizationFile);                                                                                                  // generate a certain energy range polarization distribution and put it into a root file
-    void getPolarizationFromRaw(std::string protonProducedData, std::string heliumProducedData, std::string muonDataFile, std::string polarizationFile);                                              // generate a certain energy range polarization distribution and put it into a root file
+    std::__1::pair<TH1D *, TH1D *> getPAndHeHist(ROOT::RDataFrame &p2MuonDataFrame, ROOT::RDataFrame &he2MuonDataFrame, float energyFloor, float energyCeil, std::string headerOfTH1D, int parentID, int binNumber); // get the proton and helium polarization distribution and mix together
+    void TH1DDrawing(TH1D *hist, std::string xTitle, std::string yTitle);                                                                                                                                            // TH1D drawing function
+    void findCertainEnergyRangePolarization(std::string muonDataFile, std::string polarizationFile, int binNumber);                                                                                                  // generate a certain energy range polarization distribution and put it into a root file
+    void getPolarizationFromRaw(std::string protonProducedData, std::string heliumProducedData, std::string muonDataFile, std::string polarizationFile, int binNumber);                                              // generate a certain energy range polarization distribution and put it into a root file
 };
 
 std::map<int, std::map<int, muonDataFormat>> getPmu::polarizationEnergyRelation(ROOT::RDataFrame &rawDataFrame, int muonID)
@@ -184,7 +184,7 @@ void getPmu::findRelationPanM(std::string protonProducedData, std::string helium
     outputFile->Close();
 }
 
-std::__1::pair<TH1D *, TH1D *> getPmu::getPAndHeHist(ROOT::RDataFrame &p2MuonDataFrame, ROOT::RDataFrame &he2MuonDataFrame, float energyFloor, float energyCeil, std::string headerOfTH1D, int parentID) // get the proton and helium polarization distribution and mix together
+std::__1::pair<TH1D *, TH1D *> getPmu::getPAndHeHist(ROOT::RDataFrame &p2MuonDataFrame, ROOT::RDataFrame &he2MuonDataFrame, float energyFloor, float energyCeil, std::string headerOfTH1D, int parentID, int binNumber) // get the proton and helium polarization distribution and mix together
 {
     if (gROOT->FindObject("MuonPmu") && gROOT->FindObject("AntiPmu") && gROOT->FindObject("MuonPmuHe") && gROOT->FindObject("AntiPmuHe"))
     {
@@ -194,10 +194,10 @@ std::__1::pair<TH1D *, TH1D *> getPmu::getPAndHeHist(ROOT::RDataFrame &p2MuonDat
         delete gROOT->FindObject("AntiPmuHe");
     }
 
-    TH1D *MuonPmuP = new TH1D("MuonPmu", "MuonPmu", 100, -1, 1);
-    TH1D *AntiMuonPmuP = new TH1D("AntiPmu", "AntiPmu", 100, -1, 1);
-    TH1D *MuonPmuHe = new TH1D("MuonPmuHe", "MuonPmuHe", 100, -1, 1);
-    TH1D *AntiMuonPmuHe = new TH1D("AntiPmuHe", "AntiPmuHe", 100, -1, 1);
+    TH1D *MuonPmuP = new TH1D("MuonPmu", "MuonPmu", binNumber, -1, 1);
+    TH1D *AntiMuonPmuP = new TH1D("AntiPmu", "AntiPmu", binNumber, -1, 1);
+    TH1D *MuonPmuHe = new TH1D("MuonPmuHe", "MuonPmuHe", binNumber, -1, 1);
+    TH1D *AntiMuonPmuHe = new TH1D("AntiPmuHe", "AntiPmuHe", binNumber, -1, 1);
 
     p2MuonDataFrame.Foreach([&parentID, &energyFloor, &energyCeil, &MuonPmuP, &AntiMuonPmuP, &MuonPmuHe, &AntiMuonPmuHe](int PDGID, int ParPDGID, float Ek, float ParEk, float Pmu)
                             {
@@ -232,8 +232,8 @@ std::__1::pair<TH1D *, TH1D *> getPmu::getPAndHeHist(ROOT::RDataFrame &p2MuonDat
     auto muonHistName = headerOfTH1D + "MuonPmu";
     auto antiMuonHistName = headerOfTH1D + "AntiMuonPmu";
 
-    TH1D *totalMuonPmu = new TH1D(muonHistName.c_str(), muonHistName.c_str(), 100, -1, 1);
-    TH1D *totalAntiMuonPmu = new TH1D(antiMuonHistName.c_str(), antiMuonHistName.c_str(), 100, -1, 1);
+    TH1D *totalMuonPmu = new TH1D(muonHistName.c_str(), muonHistName.c_str(), binNumber, -1, 1);
+    TH1D *totalAntiMuonPmu = new TH1D(antiMuonHistName.c_str(), antiMuonHistName.c_str(), binNumber, -1, 1);
 
     MuonPmuP->Scale(9.704844263299673);
     AntiMuonPmuP->Scale(9.704844263299673);
@@ -260,7 +260,7 @@ void getPmu::TH1DDrawing(TH1D *hist, std::string xTitle, std::string yTitle) // 
 }
 
 // generate a certain energy range polarization distribution and put it into a root file
-void getPmu::findCertainEnergyRangePolarization(std::string muonDataFile, std::string polarizationFile)
+void getPmu::findCertainEnergyRangePolarization(std::string muonDataFile, std::string polarizationFile, int binNumber)
 {
     // find the polarization of the pion
 
@@ -274,9 +274,9 @@ void getPmu::findCertainEnergyRangePolarization(std::string muonDataFile, std::s
     ROOT::RDataFrame p2MuonDataFrame("muonData(P)", muonDataFile.c_str());
     ROOT::RDataFrame he2MuonDataFrame("muonData(He)", muonDataFile.c_str());
 
-    auto piHists = getPAndHeHist(p2MuonDataFrame, he2MuonDataFrame, energyFloor, energyCeil, "pi", 211);
-    auto KHists = getPAndHeHist(p2MuonDataFrame, he2MuonDataFrame, energyFloor, energyCeil, "K", 321);
-    auto KLongHists = getPAndHeHist(p2MuonDataFrame, he2MuonDataFrame, 0, 1e9, "KLong", 130);
+    auto piHists = getPAndHeHist(p2MuonDataFrame, he2MuonDataFrame, energyFloor, energyCeil, "pi", 211, binNumber);
+    auto KHists = getPAndHeHist(p2MuonDataFrame, he2MuonDataFrame, energyFloor, energyCeil, "K", 321, binNumber);
+    auto KLongHists = getPAndHeHist(p2MuonDataFrame, he2MuonDataFrame, 0, 1e9, "KLong", 130, binNumber);
 
     TH1DDrawing(piHists.first, "polarization (P_{#mu^{-}} (#pi^{-}))", "Normalized Frequency");
     TH1DDrawing(piHists.second, "polarization (P_{#mu^{+}} (#pi^{+}))", "Normalized Frequency");
@@ -301,10 +301,10 @@ void getPmu::findCertainEnergyRangePolarization(std::string muonDataFile, std::s
 }
 
 // total polarization calculation
-void getPmu::getPolarizationFromRaw(std::string protonProducedData, std::string heliumProducedData, std::string muonDataFile, std::string polarizationFile)
+void getPmu::getPolarizationFromRaw(std::string protonProducedData, std::string heliumProducedData, std::string muonDataFile, std::string polarizationFile, int binNumber)
 {
     findRelationPanM(protonProducedData, heliumProducedData, muonDataFile);
-    findCertainEnergyRangePolarization(muonDataFile, polarizationFile);
+    findCertainEnergyRangePolarization(muonDataFile, polarizationFile, binNumber);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////
@@ -322,9 +322,11 @@ public:
     TH1D generateSinglePolarization(string polarizationFileName, int parentOption, bool charge);
 
     TH1D PmuMichelDis(double KPiRatio, bool charge, int numEvents, std::string polarizationFile); // generate the polarization distribution of the Michel electrons in a certain Pmu
-    TH1D IsotropyDis(int numEvents);                                                              // generate the isotropy distribution of the Michel electrons
+    TH1D PmuEigenMichelDis(double KPiRatio, bool charge, int numEvents, TH1D polarizationHist);
+    TH1D IsotropyDis(int numEvents); // generate the isotropy distribution of the Michel electrons
     TH2D PmuMichelDis2D(double KPiRatio, bool charge, int numEvents, std::string polarizationFile);
     TH1D getSingleParentMuon(int parentOption, int division, bool charge, std::string inputFile);
+    void generateMichelMega(double KPiRatio, std::string inputFile, std::string outputFile);
 };
 
 double GenMichel::getWeight(double alpha, double Pmu, double cosTheta, double phi)
@@ -370,7 +372,7 @@ TH1D GenMichel::getSimulatedMichel(std::string inputFile)
     // ROOT::RDataFrame simulatedMichelData("Michel Momentum Direction", "/Users/sunmingchen/RawData/simulationMichel.root");
     ROOT::RDataFrame simulatedMichelData("Michel Momentum Direction", inputFile.c_str());
 
-    TH1D simulatedMichel("simulatedMichel", "simulatedMichel", 1000, -1, 1);
+    TH1D simulatedMichel("simulatedMichel", "simulatedMichel", 100, -1, 1);
 
     simulatedMichelData.Foreach([&simulatedMichel](double momentumX, double momentumY, double momentumZ)
                                 { 
@@ -391,7 +393,7 @@ TH1D GenMichel::generatePolarization(std::string polarizationFile, double KPiRat
 
         std::string headerOfTH1D = "KPiRatio = " + std::to_string(KPiRatio) + " Anti-muon";
 
-        TH1D outputHist(headerOfTH1D.c_str(), headerOfTH1D.c_str(), 100, -1, 1);
+        TH1D outputHist(headerOfTH1D.c_str(), headerOfTH1D.c_str(), piPolarization->GetNbinsX(), -1, 1);
         piPolarization->Scale(1 / piPolarization->Integral());
         kaPolarization->Scale(KPiRatio / kaPolarization->Integral());
 
@@ -406,7 +408,7 @@ TH1D GenMichel::generatePolarization(std::string polarizationFile, double KPiRat
 
         std::string headerOfTH1D = "KPiRatio = " + std::to_string(KPiRatio) + " Muon";
 
-        TH1D outputHist(headerOfTH1D.c_str(), headerOfTH1D.c_str(), 100, -1, 1);
+        TH1D outputHist(headerOfTH1D.c_str(), headerOfTH1D.c_str(), piPolarization->GetNbinsX(), -1, 1);
         piPolarization->Scale(1 / piPolarization->Integral());
         kaPolarization->Scale(KPiRatio / kaPolarization->Integral());
 
@@ -428,10 +430,40 @@ TH1D GenMichel::PmuMichelDis(double KPiRatio, bool charge, int numEvents, std::s
         HistID += "Muon";
     }
 
-    TH1D pmuMichelDis(HistID.c_str(), HistID.c_str(), 1000, -1, 1);
+    TH1D pmuMichelDis(HistID.c_str(), HistID.c_str(), 100, -1, 1);
 
     TRandom random(time(0));
     auto polarizationHist = generatePolarization(polarizationFile, KPiRatio, charge);
+    for (int i = 0; i < numEvents; i++)
+    {
+        double Pmu = polarizationHist.GetRandom();
+
+        auto coordinateTuple = generator(random, Pmu);
+        double cosTheta = std::get<0>(coordinateTuple);
+        double phi = std::get<1>(coordinateTuple);
+        double weight = std::get<2>(coordinateTuple);
+
+        pmuMichelDis.Fill(cosTheta, weight);
+    }
+
+    return pmuMichelDis;
+}
+
+TH1D GenMichel::PmuEigenMichelDis(double KPiRatio, bool charge, int numEvents, TH1D polarizationHist)
+{
+    std::string HistID = "KPiRatio = " + std::to_string(KPiRatio) + " ";
+    if (charge)
+    {
+        HistID += "Anti-muon";
+    }
+    else
+    {
+        HistID += "Muon";
+    }
+
+    TH1D pmuMichelDis(HistID.c_str(), HistID.c_str(), 100, -1, 1);
+
+    TRandom random(time(0));
     for (int i = 0; i < numEvents; i++)
     {
         double Pmu = polarizationHist.GetRandom();
@@ -459,7 +491,7 @@ TH2D GenMichel::PmuMichelDis2D(double KPiRatio, bool charge, int numEvents, std:
         HistID += "Muon";
     }
 
-    TH2D pmuMichelDis(HistID.c_str(), HistID.c_str(), 1000, 0, 2 * TMath::Pi(), 1000, -1, 1);
+    TH2D pmuMichelDis(HistID.c_str(), HistID.c_str(), 100, 0, 2 * TMath::Pi(), 100, -1, 1);
 
     TRandom random(time(0));
     auto polarizationHist = generatePolarization(polarizationFile, KPiRatio, charge);
@@ -480,7 +512,7 @@ TH2D GenMichel::PmuMichelDis2D(double KPiRatio, bool charge, int numEvents, std:
 
 TH1D GenMichel::IsotropyDis(int numEvents)
 {
-    TH1D isotropyDis("IsotropyDis", "IsotropyDis", 1000, -1, 1);
+    TH1D isotropyDis("IsotropyDis", "IsotropyDis", 100, -1, 1);
     TRandom random(time(0));
 
     for (int i = 0; i < numEvents; i++)
@@ -576,6 +608,45 @@ TH1D GenMichel::getSingleParentMuon(int parentOption, int division, bool charge,
     return MichelDis;
 }
 
+void GenMichel::generateMichelMega(double KPiRatio, std::string polarizationFile, std::string outputFile)
+{
+    TFile polarizationData(polarizationFile.c_str(), "READ");
+
+    auto piPolarization = (TH1D *)polarizationData.Get("piMuonPmu");
+    auto kaPolarization = (TH1D *)polarizationData.Get("KMuonPmu");
+    auto piPolarizationAnti = (TH1D *)polarizationData.Get("piAntiMuonPmu");
+    auto kaPolarizationAnti = (TH1D *)polarizationData.Get("KAntiMuonPmu");
+
+    TH1D piMichelDis("piMichelDis", "piMichelDis", 100, -1, 1);
+    TH1D kaMichelDis("kaMichelDis", "kaMichelDis", 100, -1, 1);
+    TH1D piMichelDisAnti("piMichelDisAnti", "piMichelDisAnti", 100, -1, 1);
+    TH1D kaMichelDisAnti("kaMichelDisAnti", "kaMichelDisAnti", 100, -1, 1);
+
+    auto tempHist = PmuEigenMichelDis(KPiRatio, false, 1e9, *piPolarization);
+    piMichelDis.Add(&tempHist);
+    tempHist.Clear();
+
+    tempHist = PmuEigenMichelDis(KPiRatio, true, 1e9, *piPolarizationAnti);
+    piMichelDisAnti.Add(&tempHist);
+    tempHist.Clear();
+
+    tempHist = PmuEigenMichelDis(KPiRatio, false, 1e9, *kaPolarization);
+    kaMichelDis.Add(&tempHist);
+    tempHist.Clear();
+
+    tempHist = PmuEigenMichelDis(KPiRatio, true, 1e9, *kaPolarizationAnti);
+    kaMichelDisAnti.Add(&tempHist);
+    tempHist.Clear();
+
+    TFile output(outputFile.c_str(), "RECREATE");
+
+    piMichelDis.Write();
+    piMichelDisAnti.Write();
+    kaMichelDis.Write();
+    kaMichelDisAnti.Write();
+
+    output.Close();
+}
 ///////////////////////////////////////////////////////////////////////////////////
 // main function: example for generating the polarization distribution of the Michel electrons in a certain Pmu
 ///////////////////////////////////////////////////////////////////////////////////
