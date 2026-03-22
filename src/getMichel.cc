@@ -369,11 +369,11 @@ std::map<int, std::map<int, muonDataWithWeight>> getPmu::getPolarizationWithWeig
                              }
                              //  mission accomplished
                          },
-                         {"KillProc", "ParPDGID", "Ek", "ParTrkID", "EvtID", "Zenith", "Helicity", "Weight"});
+                         {"PDGID", "KillProc", "ParPDGID", "Ek", "ParTrkID", "EvtID", "Zenith", "Helicity", "Weight"});
 
     auto parentIter = motherMap.begin();
     // find the parent particle energy
-    rawDataFrame.Foreach([&muonID, &parentIter, &motherMap, &muonDataForm](int PDGID, int EvtID, int TrkID, int Ek)
+    rawDataFrame.Foreach([&muonID, &parentIter, &motherMap, &muonDataForm](int PDGID, int EvtID, int TrkID, float Ek)
                          {
                              if (EvtID == parentIter->first && std::find(parentIter->second.begin(), parentIter->second.end(), TrkID) != parentIter->second.end())
                              {
@@ -434,18 +434,18 @@ void getPmu::findRelationPolarizationWithWeight(std::string protonProducedData, 
     muonDataWithWeight a_muon_data;
     tree_he->Branch("Ek", &a_muon_data.muonEk, "Ek/F");
     tree_he->Branch("PDGID", &a_muon_data.pdgID, "PDGID/I");
-    tree_he->Branch("ParentPDGID", &a_muon_data.parentPDGID, "ParentPDGID/I");
-    tree_he->Branch("Polarization", &a_muon_data.polarization, "Polarization/F");
+    tree_he->Branch("ParPDGID", &a_muon_data.parentPDGID, "ParPDGID/I");
+    tree_he->Branch("Pmu", &a_muon_data.polarization, "Pmu/F");
     tree_he->Branch("Zenith", &a_muon_data.zenith, "Zenith/F");
-    tree_he->Branch("ParentEk", &a_muon_data.parentEk, "ParentEk/F");
+    tree_he->Branch("ParEk", &a_muon_data.parentEk, "ParEk/F");
     tree_he->Branch("Weight", &a_muon_data.weight, "Weight/F");
 
     tree_pr->Branch("Ek", &a_muon_data.muonEk, "Ek/F");
     tree_pr->Branch("PDGID", &a_muon_data.pdgID, "PDGID/I");
-    tree_pr->Branch("ParentPDGID", &a_muon_data.parentPDGID, "ParentPDGID/I");
-    tree_pr->Branch("Polarization", &a_muon_data.polarization, "Polarization/F");
+    tree_pr->Branch("ParPDGID", &a_muon_data.parentPDGID, "ParPDGID/I");
+    tree_pr->Branch("Pmu", &a_muon_data.polarization, "Pmu/F");
     tree_pr->Branch("Zenith", &a_muon_data.zenith, "Zenith/F");
-    tree_pr->Branch("ParentEk", &a_muon_data.parentEk, "ParentEk/F");
+    tree_pr->Branch("ParEk", &a_muon_data.parentEk, "ParEk/F");
     tree_pr->Branch("Weight", &a_muon_data.weight, "Weight/F");
 
     FillTheTTreeWithWeight(tree_he, he_mu_minus, a_muon_data);
@@ -658,6 +658,7 @@ TH1D GenMichel::generatePolarization(std::string polarizationFile, double KPiRat
 
         outputHist.Add(piPolarization, kaPolarization);
         outputHist.Scale(1 / outputHist.Integral());
+        outputHist.SetDirectory(0);
         return outputHist;
     }
     else
@@ -673,6 +674,7 @@ TH1D GenMichel::generatePolarization(std::string polarizationFile, double KPiRat
 
         outputHist.Add(piPolarization, kaPolarization);
         outputHist.Scale(1 / outputHist.Integral());
+        outputHist.SetDirectory(0);
         return outputHist;
     }
 }
@@ -818,6 +820,7 @@ TH1D GenMichel::generateSinglePolarization(string polarizationFileName, int pare
 
     outputHist.Add(polarizationHist);
 
+    outputHist.SetDirectory(0);
     return outputHist;
 }
 

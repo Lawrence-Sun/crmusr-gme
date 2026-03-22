@@ -13,7 +13,7 @@
 #include "TFile.h"
 #include "TH1D.h"
 
-auto generate_michel()
+auto generate_michel(std::string outputFolderPath)
 {
     // 读取文件获取四个分布
     TFile eigen_michel_dis("/Users/sunmingchen/codeDIR/GME/dev/megaMichelDis.root", "READ");
@@ -33,18 +33,20 @@ auto generate_michel()
     ka_N_Michel->Scale(1 / ka_N_Michel->Integral());
     ka_P_Michel->Scale(1 / ka_P_Michel->Integral());
 
-    TFile outputFile("michelDis.root", "RECREATE");
+    std::string outputFilePath = outputFolderPath + "/michelDis.root";
+    TFile outputFile(outputFilePath.c_str(), "RECREATE");
+    // TFile outputFile("michelDis.root", "RECREATE");
     outputFile.cd();
 
     // 生成假设ratio为0.2的分布
     TH1D simulated_data("simulated_data", "simulated_data", 100, -1, 1);
-    simulated_data.Add(ka_N_Michel, pi_N_Michel, 0.2, 1);
+    simulated_data.Add(ka_N_Michel, pi_N_Michel, 0.05, 1);
     simulated_data.Write();
 
     // 从0.2到0.3均匀分布100个点
     int num_points = 1000;
-    double start_ratio = 0.15;
-    double end_ratio = 0.25;
+    double start_ratio = 0.01;
+    double end_ratio = 0.10;
     double step = (end_ratio - start_ratio) / (num_points - 1);
 
     for (int i = 0; i < num_points; ++i)
