@@ -17,6 +17,8 @@
 #include <cmath>
 #include <algorithm>
 #include <random>
+#include <unordered_map>
+#include <limits>
 
 #include "TFile.h"
 #include "TH1.h"
@@ -77,6 +79,7 @@ public:
     std::map<int, std::map<int, muonDataFormat>> polarizationEnergyRelation(ROOT::RDataFrame &rawDataFrame, int muonID);  // find the muon data from the root file
     void FillTheTTree(TTree *tree, std::map<int, std::map<int, muonDataFormat>> muonDataForm, muonDataFormat &aMuonData); // fill the TTree with muon and parent particle data
     void findRelationPanM(std::string protonProducedData, std::string heliumProducedData, std::string muonDataFile);      // pick up all muon data from raw data file
+    void processMuonDataByEvent(ROOT::RDataFrame &rawDataFrame, int muonID, TTree *tree, muonDataFormat &aMuonData);      // stream one event at a time and write directly to tree
 
     std::__1::pair<TH1D *, TH1D *> getPAndHeHist(ROOT::RDataFrame &pr_mu_df, ROOT::RDataFrame &he_mu_df, float E_lower_bound, float E_upper_bound, std::string hist_header, int parentID, int binNumber); // get the proton and helium polarization distribution and mix together
     void TH1DDrawing(TH1D *hist, std::string xTitle, std::string yTitle);                                                                                                                                 // TH1D drawing function
@@ -87,6 +90,8 @@ public:
     std::map<int, std::map<int, muonDataWithWeight>> getPolarizationWithWeight(ROOT::RDataFrame &rawDataFrame, int muonID);                                                                                     // find the muon data from the root file (with weight)
     void FillTheTTreeWithWeight(TTree *tree, std::map<int, std::map<int, muonDataWithWeight>> muonDataForm, muonDataWithWeight &aMuonData);                                                                     // fill the TTree with muon and parent particle data (with weight)
     void findRelationPolarizationWithWeight(std::string protonProducedData, std::string heliumProducedData, std::string muonDataFile);                                                                          // pick up all muon data from raw data file (with weight)
+    void findRelationPolarizationWithWeightByEvent(std::string protonProducedData, std::string heliumProducedData, std::string muonDataFile);                                                                   // pick up all muon data from raw data file (with weight, event-streaming)
+    void processMuonDataByEventWithWeight(ROOT::RDataFrame &rawDataFrame, int muonID, TTree *tree, muonDataWithWeight &aMuonData);                                                                              // stream one event at a time and write directly to tree (with weight)
     std::__1::pair<TH1D *, TH1D *> pr_he_weighted_hist(ROOT::RDataFrame &pr_mu_df, ROOT::RDataFrame &he_mu_df, float E_lower_bound, float E_upper_bound, std::string hist_header, int parentID, int binNumber); // get the proton and helium polarization distribution and mix together
     void findCertainEnergyRangePolarizationWithWeight(std::string muonDataFile, std::string polarizationFile, int binNumber);                                                                                   // generate a certain energy range polarization distribution and put it into a root file
     void gen_pol_with_wgt(std::string proton_produced_data, std::string helium_produced_data, std::string muon_data_file, std::string polarization_file, int bin_number);                                       // generate a certain energy range polarization distribution and put it into a root file
@@ -178,11 +183,6 @@ void getPmu::findRelationPanM(std::string protonProducedData, std::string helium
     ROOT::RDataFrame HeMuonDataFrame("G4Run0/ReactionChain(13)", heliumProducedData);
     ROOT::RDataFrame HeAntiMuonDataFrame("G4Run0/ReactionChain(-13)", heliumProducedData);
 
-    auto PMuonData = polarizationEnergyRelation(PMuonDataFrame, 13);
-    auto PAntiMuonData = polarizationEnergyRelation(PAntiMuonDataFrame, -13);
-    auto HeMuonData = polarizationEnergyRelation(HeMuonDataFrame, 13);
-    auto HeAntiMuonData = polarizationEnergyRelation(HeAntiMuonDataFrame, -13);
-
     // TFile *outputFile = new TFile("PmuEkRelation2.root", "RECREATE");
     TFile *outputFile = new TFile(muonDataFile.c_str(), "RECREATE");
     TTree *treeHe = new TTree("muonData(He)", "muonData(He)");
@@ -203,15 +203,78 @@ void getPmu::findRelationPanM(std::string protonProducedData, std::string helium
     treeP->Branch("zenith", &aMuonData.zenith, "zenith/F");
     treeP->Branch("ParEk", &aMuonData.parentEk, "ParEk/F");
 
-    FillTheTTree(treeHe, HeMuonData, aMuonData);
-    FillTheTTree(treeHe, HeAntiMuonData, aMuonData);
+    processMuonDataByEvent(HeMuonDataFrame, 13, treeHe, aMuonData);
+    processMuonDataByEvent(HeAntiMuonDataFrame, -13, treeHe, aMuonData);
     treeHe->Write();
 
-    FillTheTTree(treeP, PMuonData, aMuonData);
-    FillTheTTree(treeP, PAntiMuonData, aMuonData);
+    processMuonDataByEvent(PMuonDataFrame, 13, treeP, aMuonData);
+    processMuonDataByEvent(PAntiMuonDataFrame, -13, treeP, aMuonData);
     treeP->Write();
 
     outputFile->Close();
+}
+
+void getPmu::processMuonDataByEvent(ROOT::RDataFrame &rawDataFrame, int muonID, TTree *tree, muonDataFormat &aMuonData)
+{
+    struct MuonCandidate
+    {
+        float polarization;
+        float muonEk;
+        float zenith;
+        int pdgID;
+        int parentPDGID;
+        int parentTrkID;
+    };
+
+    std::vector<MuonCandidate> currentEventMuons;
+    std::unordered_map<int, float> currentEventTrackEnergy;
+    int currentEvtID = std::numeric_limits<int>::min();
+    bool hasEvent = false;
+    auto flushCurrentEvent = [&]()
+    {
+        for (const auto &muon : currentEventMuons)
+        {
+            aMuonData.polarization = muon.polarization;
+            aMuonData.muonEk = muon.muonEk;
+            aMuonData.zenith = muon.zenith;
+            aMuonData.pdgID = muon.pdgID;
+            aMuonData.parentPDGID = muon.parentPDGID;
+
+            auto parentIter = currentEventTrackEnergy.find(muon.parentTrkID);
+            aMuonData.parentEk = parentIter == currentEventTrackEnergy.end() ? 0.0f : parentIter->second;
+            tree->Fill();
+        }
+
+        currentEventMuons.clear();
+        currentEventTrackEnergy.clear();
+    };
+
+    rawDataFrame.Foreach([&](int PDGID, std::string KillProc, int ParPDGID, float Ek, int ParTrkID, int TrkID, int EvtID, float Zenith, float Helicity)
+                         {
+                             if (!hasEvent)
+                             {
+                                 currentEvtID = EvtID;
+                                 hasEvent = true;
+                             }
+
+                             if (EvtID != currentEvtID)
+                             {
+                                 flushCurrentEvent();
+                                 currentEvtID = EvtID;
+                             }
+
+                             currentEventTrackEnergy[TrkID] = Ek;
+
+                             if (PDGID == muonID && KillProc == "<0|" && Zenith < 1 - std::sqrt(3) / 2)
+                             {
+                                 currentEventMuons.emplace_back(MuonCandidate{Helicity, Ek, Zenith, PDGID, ParPDGID, ParTrkID});
+                             } },
+                         {"PDGID", "KillProc", "ParPDGID", "Ek", "ParTrkID", "TrkID", "EvtID", "Zenith", "Helicity"});
+
+    if (hasEvent)
+    {
+        flushCurrentEvent();
+    }
 }
 
 std::__1::pair<TH1D *, TH1D *> getPmu::getPAndHeHist(ROOT::RDataFrame &pr_mu_df, ROOT::RDataFrame &he_mu_df, float E_lower_bound, float E_upper_bound, std::string hist_header, int parentID, int binNumber) // get the proton and helium polarization distribution and mix together
@@ -459,6 +522,110 @@ void getPmu::findRelationPolarizationWithWeight(std::string protonProducedData, 
     output_file->Close();
 }
 
+void getPmu::findRelationPolarizationWithWeightByEvent(std::string protonProducedData, std::string heliumProducedData, std::string muonDataFile)
+{
+    ROOT::RDataFrame pr_mu_minus_df("G4Run0/ReactionChain(13)", protonProducedData);
+    ROOT::RDataFrame pr_mu_plus_df("G4Run0/ReactionChain(-13)", protonProducedData);
+    ROOT::RDataFrame he_mu_minus_df("G4Run0/ReactionChain(13)", heliumProducedData);
+    ROOT::RDataFrame he_mu_plus_df("G4Run0/ReactionChain(-13)", heliumProducedData);
+
+    TFile *output_file = new TFile(muonDataFile.c_str(), "RECREATE");
+    TTree *tree_he = new TTree("muonData(He)", "muonData(He)");
+    TTree *tree_pr = new TTree("muonData(P)", "muonData(P)");
+
+    muonDataWithWeight a_muon_data;
+    tree_he->Branch("Ek", &a_muon_data.muonEk, "Ek/F");
+    tree_he->Branch("PDGID", &a_muon_data.pdgID, "PDGID/I");
+    tree_he->Branch("ParPDGID", &a_muon_data.parentPDGID, "ParPDGID/I");
+    tree_he->Branch("Pmu", &a_muon_data.polarization, "Pmu/F");
+    tree_he->Branch("Zenith", &a_muon_data.zenith, "Zenith/F");
+    tree_he->Branch("ParEk", &a_muon_data.parentEk, "ParEk/F");
+    tree_he->Branch("Weight", &a_muon_data.weight, "Weight/F");
+
+    tree_pr->Branch("Ek", &a_muon_data.muonEk, "Ek/F");
+    tree_pr->Branch("PDGID", &a_muon_data.pdgID, "PDGID/I");
+    tree_pr->Branch("ParPDGID", &a_muon_data.parentPDGID, "ParPDGID/I");
+    tree_pr->Branch("Pmu", &a_muon_data.polarization, "Pmu/F");
+    tree_pr->Branch("Zenith", &a_muon_data.zenith, "Zenith/F");
+    tree_pr->Branch("ParEk", &a_muon_data.parentEk, "ParEk/F");
+    tree_pr->Branch("Weight", &a_muon_data.weight, "Weight/F");
+
+    processMuonDataByEventWithWeight(he_mu_minus_df, 13, tree_he, a_muon_data);
+    processMuonDataByEventWithWeight(he_mu_plus_df, -13, tree_he, a_muon_data);
+    tree_he->Write();
+
+    processMuonDataByEventWithWeight(pr_mu_minus_df, 13, tree_pr, a_muon_data);
+    processMuonDataByEventWithWeight(pr_mu_plus_df, -13, tree_pr, a_muon_data);
+    tree_pr->Write();
+
+    output_file->Close();
+}
+
+void getPmu::processMuonDataByEventWithWeight(ROOT::RDataFrame &rawDataFrame, int muonID, TTree *tree, muonDataWithWeight &aMuonData)
+{
+    struct MuonCandidateWithWeight
+    {
+        float polarization;
+        float muonEk;
+        float zenith;
+        int pdgID;
+        int parentPDGID;
+        int parentTrkID;
+        float weight;
+    };
+
+    std::vector<MuonCandidateWithWeight> currentEventMuons;
+    std::unordered_map<int, float> currentEventTrackEnergy;
+    int currentEvtID = std::numeric_limits<int>::min();
+    bool hasEvent = false;
+    auto flushCurrentEvent = [&]()
+    {
+        for (const auto &muon : currentEventMuons)
+        {
+            aMuonData.polarization = muon.polarization;
+            aMuonData.muonEk = muon.muonEk;
+            aMuonData.zenith = muon.zenith;
+            aMuonData.pdgID = muon.pdgID;
+            aMuonData.parentPDGID = muon.parentPDGID;
+            aMuonData.weight = muon.weight;
+
+            auto parentIter = currentEventTrackEnergy.find(muon.parentTrkID);
+            aMuonData.parentEk = parentIter == currentEventTrackEnergy.end() ? 0.0f : parentIter->second;
+            tree->Fill();
+        }
+
+        currentEventMuons.clear();
+        currentEventTrackEnergy.clear();
+    };
+
+    rawDataFrame.Foreach([&](int PDGID, std::string KillProc, int ParPDGID, float Ek, int ParTrkID, int TrkID, int EvtID, float Zenith, float Helicity, float Weight)
+                         {
+                             if (!hasEvent)
+                             {
+                                 currentEvtID = EvtID;
+                                 hasEvent = true;
+                             }
+
+                             if (EvtID != currentEvtID)
+                             {
+                                 flushCurrentEvent();
+                                 currentEvtID = EvtID;
+                             }
+
+                             currentEventTrackEnergy[TrkID] = Ek;
+
+                             if (PDGID == muonID && KillProc == "<0|" && Zenith < 1 - std::sqrt(3) / 2)
+                             {
+                                 currentEventMuons.emplace_back(MuonCandidateWithWeight{Helicity, Ek, Zenith, PDGID, ParPDGID, ParTrkID, Weight});
+                             } },
+                         {"PDGID", "KillProc", "ParPDGID", "Ek", "ParTrkID", "TrkID", "EvtID", "Zenith", "Helicity", "Weight"});
+
+    if (hasEvent)
+    {
+        flushCurrentEvent();
+    }
+}
+
 std::__1::pair<TH1D *, TH1D *> getPmu::pr_he_weighted_hist(ROOT::RDataFrame &pr_mu_df, ROOT::RDataFrame &he_mu_df, float E_lower_bound, float E_upper_bound, std::string hist_header, int parentID, int binNumber)
 {
     if (gROOT->FindObject("MuonPmu") && gROOT->FindObject("AntiPmu") && gROOT->FindObject("MuonPmuHe") && gROOT->FindObject("AntiPmuHe"))
@@ -562,7 +729,8 @@ void getPmu::findCertainEnergyRangePolarizationWithWeight(std::string muonDataFi
 
 void getPmu::gen_pol_with_wgt(std::string proton_produced_data, std::string helium_produced_data, std::string muon_data_file, std::string polarization_file, int bin_number)
 {
-    findRelationPolarizationWithWeight(proton_produced_data, helium_produced_data, muon_data_file);
+    // findRelationPolarizationWithWeight(proton_produced_data, helium_produced_data, muon_data_file); // old map-based version
+    findRelationPolarizationWithWeightByEvent(proton_produced_data, helium_produced_data, muon_data_file); // new event-streaming version
     findCertainEnergyRangePolarizationWithWeight(muon_data_file, polarization_file, bin_number);
 }
 
