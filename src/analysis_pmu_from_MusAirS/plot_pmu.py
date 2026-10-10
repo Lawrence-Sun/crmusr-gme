@@ -13,8 +13,9 @@ CURVES = (
 )
 
 
-def read_data(path):
-    series = {name: [] for name, *_ in CURVES}
+def read_data(path, names=None, normalized=True):
+    """Read common histogram CSV; optionally validate normalized bin contents."""
+    series = {name: [] for name in (names if names is not None else [item[0] for item in CURVES])}
     with path.open(newline="", encoding="utf-8") as stream:
         reader = csv.DictReader(stream)
         required = {"histogram", "bin", "x", "y", "yerr"}
@@ -45,8 +46,11 @@ def read_data(path):
         if reference_x is not None and x_values != reference_x:
             raise ValueError("Histogram bin centers do not match")
         reference_x = x_values
-        if not math.isclose(sum(row[2] for row in rows), 1, rel_tol=1e-8, abs_tol=1e-8):
-            raise ValueError(f"{name} is empty or not normalized to 1")
+        integral = sum(row[2] for row in rows)
+        if not math.isfinite(integral) or integral <= 0:
+            raise ValueError(f"{name} is empty or has an invalid integral")
+        if normalized and not math.isclose(integral, 1, rel_tol=1e-8, abs_tol=1e-8):
+            raise ValueError(f"{name} is not normalized to 1")
     return series
 
 
