@@ -4,7 +4,7 @@
 
 ```
 质子 + 氦 MusAirS ROOT 文件
-  → analyze_pmu.C：初筛、历史去重、母粒子/动能筛选、分量合并、归一化
+  → analyze_pmu.C：初筛、可选原始 Weight、历史去重/全候选、母粒子/动能筛选、分量合并、归一化
   → polarizationData.root + polarizationData.csv + provenance.txt
   ├─ plot_pmu.py → combinedPmu_revise.pdf
   └─ generate_michel.C：三个独立来源、无权逆 CDF 直接采样角分布
@@ -50,6 +50,53 @@ bash src/analysis_pmu_from_MusAirS/run_pipeline.sh /path/proton.root /path/heliu
 
 默认使用逆 CDF 直接采样，每个成分采样 `100000000` 次（100M），三个来源合计 3 亿次，随机种子 `20241025`。上述示例显式指定默认统计量。试跑时可显式传入 `1000000` 降低耗时。三个成分始终独立处理、采样量相同，不使用 `100:15:5` 混合比例。
 
+## 选择原始数据与事例权重模式
+
+输入文件由前两个路径参数指定，不内置任何数据集。旧位置参数接口保持兼容；可用 `--help` 查看所有选项。
+
+### 普通模拟：单位事例权重（默认）
+
+```bash
+bash src/analysis_pmu_from_MusAirS/run_pipeline.sh \
+  /path/unweighted_proton.root /path/unweighted_helium.root pmu_unit --no-weights
+```
+
+不读取原始 `Weight`；即使该分支存在，也明确忽略。此前本机使用的两份历史原始文件没有 `Weight`，默认路径仍可精确复现旧极化图。
+
+### 重要性抽样模拟：使用原始 `Weight`
+
+```bash
+bash src/analysis_pmu_from_MusAirS/run_pipeline.sh --use-weights \
+  /path/weighted_proton.root /path/weighted_helium.root pmu_weighted
+```
+
+`--use-weights` 要求两份输入的 μ−/μ+ 四棵树均存在数值标量 `Weight` 分支；支持 `Float_t`、`Double_t` 等可转换为 double 的数值类型。缺少分支会报错，不回退为单位权重。通过初筛的候选权重必须有限且非负；零权重允许，负权重/NaN/Inf 拒绝。加权计数或误差溢出也会报错，不写出损坏结果。当前直接采样要求非负概率，因此不支持带正负权重的模拟。
+
+对每个通过筛选且保留的 μ 子，极化填充使用原始 `Weight`。去重时极化值及权重一起保留最后候选，不对被覆盖候选的权重求和。`Sumw2` 累积事例权重平方，再应用来源系数和归一化。
+
+### 来源系数与去重独立配置
+
+默认仍使用历史来源系数 `proton=9.704844263299673`、`helium=100.0`。有效权重为：
+
+```text
+单位模式：来源系数 × 1
+带权模式：来源系数 × 原始 Weight
+```
+
+**如果原始 `Weight` 已包含完整的通量/样本归一化，应将两个来源系数设为 1，避免重复计权。** 系数必须有限、非负且不能同时为零；是否需要来源缩放取决于该数据集的 `Weight` 定义，程序不能自动判断。
+
+历史 `(EvtID, ParTrkID)` 去重在两种模式下默认保留。若重要性抽样包含分裂产生的多个有效 μ 子，或数据本身应保留全部候选，使用 `--all-muons` 禁用该去重。它对应上游事件流式带权路径的全候选行为；不要未经检查就让历史去重丢弃有效带权事例。示例：
+
+```bash
+bash src/analysis_pmu_from_MusAirS/run_pipeline.sh --use-weights --all-muons \
+  --proton-scale 1 --helium-scale 1 \
+  /path/weighted_proton.root /path/weighted_helium.root pmu_weighted_all 100000000 20241025
+```
+
+文件路径、模式和系数均记录在 `provenance.txt`，包括 `use_raw_weights`、`raw_weight_column`、`legacy_deduplicate`、`proton_weight`、`helium_weight`，并传递到 Michel provenance。两种模式后续都走相同的无权直接采样：原始权重通过加权极化分布及其平均极化影响 Michel 边缘角分布，不重复给新 Michel 事例乘原始 `Weight`。Michel 默认仍每来源 100M 次。
+
+实际带权数据的物理正确性还依赖上游 `Weight` 构造是否正确；支持读取权重并不能验证其来源。`Sumw2` 也不额外建模同一模拟事例内分裂轨迹间的相关性。
+
 ## 分别运行各阶段
 
 ### C++：从原始 ROOT 文件生成绘图数据
@@ -62,7 +109,9 @@ ROOT 宏函数参数为：
 
 ```cpp
 analyze_pmu(proton, helium, outputDirectory = "pmu_output",
-            bins = 50, legacyDeduplicate = true, overwrite = false)
+            bins = 50, legacyDeduplicate = true, overwrite = false,
+            useWeights = false, protonScale = 9.704844263299673,
+            heliumScale = 100.0)
 ```
 
 例如，改用当前 `src/getMichel.cc` 的“保留全部 μ 子”行为：
@@ -71,13 +120,19 @@ analyze_pmu(proton, helium, outputDirectory = "pmu_output",
 root -l -b -q 'src/analysis_pmu_from_MusAirS/analyze_pmu.C("/path/proton.root","/path/helium.root","pmu_all_muons",50,false)'
 ```
 
+带权、全候选、来源系数为 1 的独立宏调用（新参数追加在末尾，旧调用仍兼容）：
+
+```bash
+root -l -b -q 'src/analysis_pmu_from_MusAirS/analyze_pmu.C("/path/weighted_proton.root","/path/weighted_helium.root","pmu_weighted",50,false,false,true,1.0,1.0)'
+```
+
 输出：
 
 | 文件                    | 内容                                                        |
 | ----------------------- | ----------------------------------------------------------- |
 | `polarizationData.root` | 六个 TH1D，以及 `provenance` 元数据对象                     |
 | `polarizationData.csv`  | `histogram,bin,x,y,yerr`，只保存常规 bin                    |
-| `provenance.txt`        | 输入绝对路径、大小、ROOT 版本、筛选和去重规则、权重、bin 数 |
+| `provenance.txt`        | 输入路径、大小、ROOT 版本、筛选/去重、原始权重模式、来源系数、bin 数 |
 
 文件名不沿用 `polarizationData20.root`，避免把历史命名中的 `20` 误认为 bin 数。默认实际为 50 bins，范围 `[-1,1)`。
 
@@ -170,8 +225,8 @@ python src/analysis_pmu_from_MusAirS/compare_michel_methods.py pmu_output/michel
    | K    | 321             | `100 < Ek < 500`                       |
    | K⁰L  | 130             | `0 < Ek < 1e9`                         |
 
-1. 质子、氦直方图分别乘以 `9.704844263299673`、`100.0`，相加后，各自按常规 bin 内容之和归一化。
-2. 误差为 ROOT `Sumw2` 的加权计数误差，再乘同一归一化因子；不额外引入归一化分母的统计误差。这与原直方图处理方式一致。
+1. 单位模式先按单位事例权重填充；`useWeights=true` 则用原始 `Weight` 填充。默认再将质子、氦直方图分别乘以 `9.704844263299673`、`100.0`（可配置），相加后，各自按常规 bin 内容之和归一化。默认单位模式与历史结果一致；带权模式会改变极化分布，不承诺与旧无权图一致。
+2. 误差为 ROOT `Sumw2`：有效权重平方之和的平方根，再乘同一归一化因子；不额外引入归一化分母的统计误差或同一事例内轨迹间的协方差。这沿用原直方图的误差处理。
 3. 输出六个直方图：`piMuonPmu`、`piAntiMuonPmu`、`KMuonPmu`、`KAntiMuonPmu`、`KLongMuonPmu`、`KLongAntiMuonPmu`。绘图使用三个 μ− 直方图。
 4. 图保持原有 5×5 英寸、红/绿/蓝误差点、对数纵轴和 `1e-4..1` 范围。纵轴保留历史标签 `counts`，但实际含义是**归一化 bin 含量**。零 bin 不绘制，也不添加伪计数。
 
@@ -192,4 +247,4 @@ python src/analysis_pmu_from_MusAirS/compare_michel_methods.py pmu_output/michel
 python src/analysis_pmu_from_MusAirS/test_pipeline.py -v
 ```
 
-测试在临时目录创建小型原始 ROOT 文件，检查六个极化直方图、权重、误差、历史去重（包含非连续重复事件）/全候选模式、输入错误、覆盖保护、CSV 校验，以及 Michel 权重表达式与旧模型的一致性、固定种子复现、周期插值和一键双图流程。共 12 项测试；新增直接采样与原加权算法的边缘分布一致性检验，兼容入口与主入口结果一致性检验；新增直接采样逆 CDF 边界/单调性、精确计数、误差、分布期望、固定种子复现及覆盖保护验证；额外验证修改 K 的输入极化只影响 K 曲线，不影响 π 或 K⁰L，防止再次误迁移为混合组分。缺少 Matplotlib/SciPy 时跳过对应绘图测试；缺少 ROOT 时跳过整个集成测试。不读取或修改 `dev` 的历史数据。
+测试在临时目录创建小型原始 ROOT 文件，检查六个极化直方图、权重、误差、历史去重（包含非连续重复事件）/全候选模式、输入错误、覆盖保护、CSV 校验，以及 Michel 权重表达式与旧模型的一致性、固定种子复现、周期插值和一键双图流程。共 17 项测试；新增 Float/Double 原始权重、带权去重/全候选、来源系数、零权重、缺失/非法权重及数值溢出保护、权重模式显式选择，以及带权一键双图和元数据传递验证；新增直接采样与原加权算法的边缘分布一致性检验，兼容入口与主入口结果一致性检验；新增直接采样逆 CDF 边界/单调性、精确计数、误差、分布期望、固定种子复现及覆盖保护验证；额外验证修改 K 的输入极化只影响 K 曲线，不影响 π 或 K⁰L，防止再次误迁移为混合组分。缺少 Matplotlib/SciPy 时跳过对应绘图测试；缺少 ROOT 时跳过整个集成测试。不读取或修改 `dev` 的历史数据。

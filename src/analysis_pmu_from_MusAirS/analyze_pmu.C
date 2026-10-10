@@ -42,6 +42,7 @@ Histograms makeHistograms(int bins, const std::string &prefix) {
 struct Candidate {
     int pdg, parent;
     float energy, polarization;
+    double weight;
 };
 
 void fill(Histograms &histograms, const Candidate &muon) {
@@ -55,11 +56,12 @@ void fill(Histograms &histograms, const Candidate &muon) {
         ? muon.energy > 0 && muon.energy < 1e9
         : muon.energy > 100 && muon.energy < 500;
     if (inEnergyRange) {
-        histograms[2 * species + (muon.pdg == -13)]->Fill(muon.polarization);
+        histograms[2 * species + (muon.pdg == -13)]->Fill(muon.polarization, muon.weight);
     }
 }
 
-void readRaw(const std::string &path, Histograms &histograms, bool legacyDeduplicate) {
+void readRaw(const std::string &path, Histograms &histograms,
+             bool legacyDeduplicate, bool useWeights) {
     std::unique_ptr<TFile> input(TFile::Open(path.c_str(), "READ"));
     if (!input || input->IsZombie()) throw std::runtime_error("Cannot open input: " + path);
     const double zenithLimit = 1 - std::sqrt(3.0) / 2;
@@ -77,18 +79,28 @@ void readRaw(const std::string &path, Histograms &histograms, bool legacyDedupli
                 throw std::runtime_error("Missing column " + column + " in " + treeName);
             }
         }
+        if (useWeights && std::find(columns.begin(), columns.end(), "Weight") == columns.end()) {
+            throw std::runtime_error("Weighted mode requires column Weight in " + treeName + " in " + path);
+        }
+        // Cast numeric Float_t/Double_t (and other scalar numeric types) to one
+        // callback type. Unit-weight mode deliberately ignores any raw Weight.
+        auto events = frame.Define("__pmu_event_weight", useWeights ? "static_cast<double>(Weight)" : "1.0");
         // Historical polarizationEnergyRelation() keeps the LAST selected muon
         // for each (EvtID, ParTrkID) across the entire tree. Merged raw files
         // can repeat event IDs non-contiguously, so event-local flushing is wrong.
         // Store only plotting fields, not parent energies or whole raw rows.
         std::unordered_map<std::uint64_t, Candidate> selectedMuons;
-        frame.Foreach([&](int pdg, const std::string &kill, int parent, float energy,
-                          int parentTrack, int event, float zenith, float polarization) {
+        events.Foreach([&](int pdg, const std::string &kill, int parent, float energy,
+                           int parentTrack, int event, float zenith, float polarization, double weight) {
             if (pdg != muonId || kill != "<0|" || !(zenith < zenithLimit)) return;
             if (!std::isfinite(energy) || !std::isfinite(polarization)) {
                 throw std::runtime_error("Non-finite energy/polarization in " + treeName);
             }
-            const Candidate candidate{pdg, parent, energy, polarization};
+            if (!std::isfinite(weight) || weight < 0) {
+                throw std::runtime_error("Raw Weight must be finite and nonnegative in " + treeName + " in " + path);
+            }
+            // Keep the final candidate's weight together with its polarization.
+            const Candidate candidate{pdg, parent, energy, polarization, weight};
             if (legacyDeduplicate) {
                 const auto key = (std::uint64_t(std::uint32_t(event)) << 32)
                                | std::uint32_t(parentTrack);
@@ -96,18 +108,23 @@ void readRaw(const std::string &path, Histograms &histograms, bool legacyDedupli
             } else {
                 fill(histograms, candidate);
             }
-        }, {"PDGID", "KillProc", "ParPDGID", "Ek", "ParTrkID", "EvtID", "Zenith", "Helicity"});
+        }, {"PDGID", "KillProc", "ParPDGID", "Ek", "ParTrkID", "EvtID", "Zenith", "Helicity", "__pmu_event_weight"});
         for (const auto &entry : selectedMuons) fill(histograms, entry.second);
     }
 }
 
 void run(const std::string &proton, const std::string &helium,
-         const std::string &outputDirectory, int bins, bool legacyDeduplicate, bool overwrite) {
+         const std::string &outputDirectory, int bins, bool legacyDeduplicate, bool overwrite,
+         bool useWeights, double protonScale, double heliumScale) {
     if (proton.empty() || helium.empty()) {
         throw std::runtime_error("Provide proton and helium ROOT paths; see README.md.");
     }
     if (bins <= 0 || bins > 100000) throw std::runtime_error("bins must be in [1, 100000]");
     if (outputDirectory.empty()) throw std::runtime_error("Output directory must not be empty");
+    if (!std::isfinite(protonScale) || !std::isfinite(heliumScale) ||
+        protonScale < 0 || heliumScale < 0 || !(protonScale > 0 || heliumScale > 0)) {
+        throw std::runtime_error("Source scales must be finite, nonnegative and not both zero");
+    }
     namespace fs = std::filesystem;
     const fs::path directory(outputDirectory);
     const auto rootPath = directory / "polarizationData.root";
@@ -128,12 +145,20 @@ void run(const std::string &proton, const std::string &helium,
     auto protonHists = makeHistograms(bins, "P_");
     auto heliumHists = makeHistograms(bins, "He_");
     auto totalHists = makeHistograms(bins, "");
-    readRaw(proton, protonHists, legacyDeduplicate);
-    readRaw(helium, heliumHists, legacyDeduplicate);
+    std::cout << "Raw event weights: " << (useWeights ? "Weight branch" : "unit weights") << std::endl;
+    readRaw(proton, protonHists, legacyDeduplicate, useWeights);
+    readRaw(helium, heliumHists, legacyDeduplicate, useWeights);
     for (std::size_t i = 0; i < names.size(); ++i) {
-        totalHists[i]->Add(protonHists[i].get(), protonWeight);
-        totalHists[i]->Add(heliumHists[i].get(), heliumWeight);
+        totalHists[i]->Add(protonHists[i].get(), protonScale);
+        totalHists[i]->Add(heliumHists[i].get(), heliumScale);
+        for (int bin = 0; bin <= bins + 1; ++bin) {
+            if (!std::isfinite(totalHists[i]->GetBinContent(bin)) ||
+                !std::isfinite(totalHists[i]->GetBinError(bin))) {
+                throw std::runtime_error("Non-finite weighted histogram " + names[i] + "; check raw weights/source scales");
+            }
+        }
         const double integral = totalHists[i]->Integral();
+        if (!std::isfinite(integral)) throw std::runtime_error("Non-finite histogram integral: " + names[i]);
         if (integral > 0) totalHists[i]->Scale(1.0 / integral);
         else std::cerr << "Warning: empty in-range histogram " << names[i] << '\n';
         if (totalHists[i]->GetBinContent(0) || totalHists[i]->GetBinContent(bins + 1)) {
@@ -153,7 +178,10 @@ void run(const std::string &proton, const std::string &helium,
              << "legacy_deduplicate=" << legacyDeduplicate << '\n'
              << "selection=PDGID==+/-13; KillProc==<0|; Zenith<1-sqrt(3)/2\n"
              << "pi_K_energy=100<Ek<500; KLong_energy=0<Ek<1e9\n"
-             << "proton_weight=" << protonWeight << "\nhelium_weight=" << heliumWeight << '\n'
+             << "use_raw_weights=" << useWeights << '\n'
+             << "raw_weight_column=" << (useWeights ? "Weight" : "none (unit weights)") << '\n'
+             << "proton_weight=" << protonScale << "\nhelium_weight=" << heliumScale << '\n'
+             << "effective_weight=source scale * raw Weight (or 1 in unit-weight mode)\n"
              << "normalization=sum of regular bins; empty histograms remain zero\n";
     TFile output(rootPath.string().c_str(), overwrite ? "RECREATE" : "CREATE");
     if (output.IsZombie()) throw std::runtime_error("Cannot create " + rootPath.string());
@@ -183,9 +211,12 @@ void run(const std::string &proton, const std::string &helium,
 
 void analyze_pmu(const char *proton = "", const char *helium = "",
                  const char *outputDirectory = "pmu_output", int bins = 50,
-                 bool legacyDeduplicate = true, bool overwrite = false) {
+                 bool legacyDeduplicate = true, bool overwrite = false,
+                 bool useWeights = false, double protonScale = pmu_analysis::protonWeight,
+                 double heliumScale = pmu_analysis::heliumWeight) {
     try {
-        pmu_analysis::run(proton, helium, outputDirectory, bins, legacyDeduplicate, overwrite);
+        pmu_analysis::run(proton, helium, outputDirectory, bins, legacyDeduplicate, overwrite,
+                          useWeights, protonScale, heliumScale);
     } catch (const std::exception &error) {
         std::cerr << "PMU analysis failed: " << error.what() << std::endl;
         gSystem->Exit(1);

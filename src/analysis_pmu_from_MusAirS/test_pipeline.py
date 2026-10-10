@@ -15,7 +15,10 @@ FIXTURE = r'''
 #include <TTree.h>
 #include <TSystem.h>
 #include <string>
-void make_fixture(const char *directory) {
+#include <limits>
+void make_fixture(const char *directory, bool weighted = false,
+                  double protonWeight = 2, double heliumWeight = 0.25, int invalid = 0) {
+    gSystem->mkdir(directory, true);
     for (int source = 0; source < 2; ++source) {
         std::string path = std::string(directory) + (source ? "/helium.root" : "/proton.root");
         TFile file(path.c_str(), "RECREATE");
@@ -35,12 +38,28 @@ void make_fixture(const char *directory) {
             tree.Branch("Zenith", &zenith, "Zenith/F");
             tree.Branch("Helicity", &helicity, "Helicity/F");
             tree.Branch("KillProc", &kill);
+            float floatWeight = 1;
+            double doubleWeight = 1;
+            if (weighted) {
+                // Support both common numeric ROOT branch types.
+                if (source) tree.Branch("Weight", &doubleWeight, "Weight/D");
+                else tree.Branch("Weight", &floatWeight, "Weight/F");
+            }
+            auto setWeight = [&](double value) {
+                if (invalid == 1) value = -1;
+                if (invalid == 2) value = std::numeric_limits<double>::quiet_NaN();
+                if (invalid == 3) value = std::numeric_limits<double>::infinity();
+                if (invalid == 4) value = source ? 1e200 : 1e30; // finite weights but Sumw2 overflows
+                floatWeight = value; doubleWeight = value;
+            };
             for (int species : {211, 321, 130}) {
                 ++event;
                 parent = id == 13 ? -species : species;
                 helicity = -0.1f;
+                setWeight(7);
                 tree.Fill(); // Same event/parent: overwritten in legacy mode.
                 helicity = source ? 0.5f : -0.5f;
+                setWeight(source ? heliumWeight : protonWeight);
                 tree.Fill();
                 kill = "other"; helicity = 0.8f; tree.Fill(); kill = "<0|";
                 zenith = 0.5f; tree.Fill(); zenith = 0;
@@ -48,6 +67,7 @@ void make_fixture(const char *directory) {
             // A merged tree may repeat an earlier event non-contiguously.
             event = 1; parent = id == 13 ? -211 : 211;
             helicity = source ? 0.5f : -0.5f;
+            setWeight(source ? 2 * heliumWeight : 1.5 * protonWeight);
             tree.Fill();
             tree.Write();
         }
@@ -66,6 +86,7 @@ class PipelineTest(unittest.TestCase):
         fixture = cls.directory / "make_fixture.C"
         fixture.write_text(FIXTURE)
         cls.root_call(fixture, [str(cls.directory)])
+        cls.root_call(fixture, [str(cls.directory / "weighted_raw"), True])
         cls.root_call(HERE / "analyze_pmu.C", [str(cls.directory / "proton.root"),
                      str(cls.directory / "helium.root"), str(cls.directory / "legacy"), 4])
 
@@ -101,6 +122,94 @@ class PipelineTest(unittest.TestCase):
         self.assertTrue((self.directory / "legacy/polarizationData.root").exists())
         self.assertIn("legacy_deduplicate=1",
                       (self.directory / "legacy/provenance.txt").read_text())
+
+    def test_raw_weights_and_errors(self):
+        raw = self.directory / "weighted_raw"
+        output = self.directory / "raw_weighted"
+        self.root_call(HERE / "analyze_pmu.C", [str(raw / "proton.root"), str(raw / "helium.root"),
+                       str(output), 4, True, False, True])
+        with (output / "polarizationData.csv").open() as stream:
+            rows = list(csv.DictReader(stream))
+        scale = 9.704844263299673
+        for name in {row["histogram"] for row in rows}:
+            proton, helium = (3, 0.5) if name.startswith("pi") else (2, 0.25)
+            denominator = scale * proton + 100 * helium
+            for row in (row for row in rows if row["histogram"] == name):
+                bin_index = int(row["bin"])
+                expected = scale * proton / denominator if bin_index == 2 else (
+                    100 * helium / denominator if bin_index == 4 else 0)
+                self.assertAlmostEqual(float(row["y"]), expected)
+                self.assertAlmostEqual(float(row["yerr"]), expected)
+        metadata = (output / "provenance.txt").read_text()
+        self.assertIn("use_raw_weights=1", metadata)
+        self.assertIn("raw_weight_column=Weight", metadata)
+        # With the flag off, a Weight branch is deliberately ignored.
+        ignored = self.directory / "ignored_raw_weights"
+        self.root_call(HERE / "analyze_pmu.C", [str(raw / "proton.root"), str(raw / "helium.root"), str(ignored), 4])
+        self.assertEqual((ignored / "polarizationData.csv").read_bytes(),
+                         (self.directory / "legacy/polarizationData.csv").read_bytes())
+        self.assertIn("use_raw_weights=0", (ignored / "provenance.txt").read_text())
+
+    def test_raw_weights_all_muons_and_source_scales(self):
+        raw = self.directory / "weighted_raw"
+        output = self.directory / "weighted_all"
+        self.root_call(HERE / "analyze_pmu.C", [str(raw / "proton.root"), str(raw / "helium.root"),
+                       str(output), 4, False, False, True, 1, 1])
+        with (output / "polarizationData.csv").open() as stream:
+            rows = list(csv.DictReader(stream))
+        kaon = [row for row in rows if row["histogram"] == "KMuonPmu"]
+        denominator = 7 + 2 + 7 + 0.25
+        self.assertAlmostEqual(float(kaon[1]["y"]), 16 / denominator)
+        self.assertAlmostEqual(float(kaon[1]["yerr"]), (7**2 + 2**2 + 7**2)**0.5 / denominator)
+        self.assertAlmostEqual(float(kaon[3]["y"]), 0.25 / denominator)
+        self.assertAlmostEqual(float(kaon[3]["yerr"]), 0.25 / denominator)
+        metadata = (output / "provenance.txt").read_text()
+        self.assertIn("legacy_deduplicate=0", metadata)
+        self.assertIn("proton_weight=1\nhelium_weight=1\n", metadata)
+        zero_raw = self.directory / "zero_raw_weights"
+        self.root_call(self.directory / "make_fixture.C", [str(zero_raw), True, 0, 0.25])
+        zero_output = self.directory / "zero_proton_weight"
+        self.root_call(HERE / "analyze_pmu.C", [str(zero_raw / "proton.root"), str(zero_raw / "helium.root"),
+                       str(zero_output), 4, True, False, True])
+        with (zero_output / "polarizationData.csv").open() as stream:
+            zero_rows = list(csv.DictReader(stream))
+        for name in {row["histogram"] for row in zero_rows}:
+            self.assertEqual([float(row["y"]) for row in zero_rows if row["histogram"] == name], [0, 0, 0, 1])
+
+    def test_invalid_or_missing_raw_weights(self):
+        weighted = self.directory / "weighted_raw"
+        for proton, helium in ((self.directory / "proton.root", weighted / "helium.root"),
+                               (weighted / "proton.root", self.directory / "helium.root")):
+            output = self.directory / ("missing_weight_" + proton.parent.name)
+            result = self.root_call(HERE / "analyze_pmu.C", [str(proton), str(helium), str(output),
+                                   4, True, False, True], False)
+            self.assertIn("requires column Weight", result.stderr)
+            self.assertFalse(output.exists())
+        for invalid in (1, 2, 3):
+            raw = self.directory / f"invalid_weights_{invalid}"
+            output = self.directory / f"invalid_weight_output_{invalid}"
+            self.root_call(self.directory / "make_fixture.C", [str(raw), True, 2, 0.25, invalid])
+            result = self.root_call(HERE / "analyze_pmu.C", [str(raw / "proton.root"), str(raw / "helium.root"),
+                                   str(output), 4, True, False, True], False)
+            self.assertIn("finite and nonnegative", result.stderr)
+            self.assertFalse(output.exists())
+        # Unit-weight mode must not accidentally inspect an unused NaN/Inf Weight.
+        ignored = self.directory / "ignored_invalid_weights"
+        self.root_call(HERE / "analyze_pmu.C", [str(raw / "proton.root"), str(raw / "helium.root"), str(ignored), 4])
+        self.assertEqual((ignored / "polarizationData.csv").read_bytes(),
+                         (self.directory / "legacy/polarizationData.csv").read_bytes())
+        huge = self.directory / "huge_weights"
+        huge_output = self.directory / "huge_weight_output"
+        self.root_call(self.directory / "make_fixture.C", [str(huge), True, 2, 0.25, 4])
+        result = self.root_call(HERE / "analyze_pmu.C", [str(huge / "proton.root"), str(huge / "helium.root"),
+                               str(huge_output), 4, True, False, True], False)
+        self.assertIn("Non-finite weighted histogram", result.stderr)
+        self.assertFalse(huge_output.exists())
+        for scales in ((-1, 1), (0, 0), (1e300, 1)):
+            output = self.directory / "invalid_scales"
+            self.root_call(HERE / "analyze_pmu.C", [str(weighted / "proton.root"), str(weighted / "helium.root"),
+                           str(output), 4, True, False, True, *scales], False)
+            self.assertFalse(output.exists())
 
     def test_all_muons_mode(self):
         self.root_call(HERE / "analyze_pmu.C", [str(self.directory / "proton.root"),
@@ -311,6 +420,64 @@ void check_weight() {
         result = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=120)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((blocked / "polarizationData.root").exists())
+
+    @unittest.skipUnless(importlib.util.find_spec("matplotlib") and importlib.util.find_spec("scipy"),
+                         "matplotlib and scipy are required")
+    def test_weighted_one_command_pipeline(self):
+        import os
+        import sys
+        raw = self.directory / "weighted_raw"
+        output = self.directory / "weighted full pipeline"
+        command = ["bash", str(HERE / "run_pipeline.sh"), "--use-weights", str(raw / "proton.root"),
+                   "--proton-scale", "1", str(raw / "helium.root"), str(output), "10000", "42",
+                   "--helium-scale", "1", "--all-muons"]
+        result = subprocess.run(command, capture_output=True, text=True,
+                                env=dict(os.environ, PYTHON=sys.executable), timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for filename in ("combinedPmu_revise.pdf", "michelComponents.pdf"):
+            self.assertTrue((output / filename).read_bytes().startswith(b"%PDF"))
+        upstream = (output / "provenance.txt").read_text()
+        downstream = (output / "michel_provenance.txt").read_text()
+        for value in ("use_raw_weights=1", "raw_weight_column=Weight", "legacy_deduplicate=0",
+                      "proton_weight=1\nhelium_weight=1\n"):
+            self.assertIn(value, upstream)
+            self.assertIn(value, downstream)
+        # The downstream sampler must use the newly weighted mean, not the old
+        # unit-weight mean. These expectations include the extra pion candidate.
+        for name, expected in (("piMuon", -3.525 / 19.75), ("KMuon", -0.14), ("KLongMuon", -0.14)):
+            line = next(line for line in downstream.splitlines() if line.startswith(name + ":"))
+            self.assertAlmostEqual(float(line.split("mean_polarization=")[1]), expected)
+        with (output / "michelData.csv").open() as stream:
+            rows = list(csv.DictReader(stream))
+        for name in ("piMuon", "KMuon", "KLongMuon"):
+            self.assertEqual(sum(float(row["y"]) for row in rows if row["histogram"] == name), 10000)
+        # Selecting weights must fail rather than silently fall back on old data.
+        missing = self.directory / "weighted_cli_missing"
+        result = subprocess.run(["bash", str(HERE / "run_pipeline.sh"), str(self.directory / "proton.root"),
+                                 str(self.directory / "helium.root"), str(missing), "100", "42", "--use-weights"],
+                                capture_output=True, text=True,
+                                env=dict(os.environ, PYTHON=sys.executable), timeout=120)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires column Weight", result.stderr)
+        self.assertFalse(missing.exists())
+
+    def test_pipeline_cli_options(self):
+        import os
+        import sys
+        environment = dict(os.environ, PYTHON=sys.executable)
+        command = ["bash", str(HERE / "run_pipeline.sh")]
+        help_result = subprocess.run(command + ["--help"], capture_output=True, text=True, env=environment)
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("--use-weights", help_result.stdout)
+        output = self.directory / "bad_cli"
+        base = command + [str(self.directory / "proton.root"), str(self.directory / "helium.root"), str(output)]
+        for options in (("--use-weights", "--no-weights"), ("--unknown-weight-option",),
+                        ("--proton-scale", "-1"), ("--proton-scale", "nan"),
+                        ("--helium-scale", "inf"), ("--proton-scale", "0", "--helium-scale", "0"),
+                        ("0",), ("100", "0")):
+            result = subprocess.run(base + list(options), capture_output=True, text=True, env=environment)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(output.exists())
 
     @unittest.skipUnless(importlib.util.find_spec("matplotlib") and importlib.util.find_spec("scipy"),
                          "matplotlib and scipy are required")
