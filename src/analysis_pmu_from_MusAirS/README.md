@@ -50,6 +50,17 @@ bash src/analysis_pmu_from_MusAirS/run_pipeline.sh /path/proton.root /path/heliu
 
 默认使用逆 CDF 直接采样，每个成分采样 `100000000` 次（100M），三个来源合计 3 亿次，随机种子 `20241025`。上述示例显式指定默认统计量。试跑时可显式传入 `1000000` 降低耗时。三个成分始终独立处理、采样量相同，不使用 `100:15:5` 混合比例。
 
+## 下游灵敏度分析接口
+
+`michelData.root` 可直接作为 `src/sensitivity/ratio5percent/` 的下游输入。
+`generate_michel.C` 新增最后一个可选参数 `includeAntiMuon`（默认 `false`，
+保留原三个 μ− 模板与随机流）；设为 `true` 时额外生成
+`piAntiMuon`、`KAntiMuon`、`KLongAntiMuon`，并记录到 provenance。
+
+[端到端入口与接口说明](../sensitivity/ratio5percent/README.md#1-完整分析入口) 提供从两份
+原始 MusAirS 数据生成模板、计算比例测量/纯 pion 排除并绘制两张图的统一命令。
+现有 `run_pipeline.sh` 的默认行为不变。
+
 ## 选择原始数据与事例权重模式
 
 输入文件由前两个路径参数指定，不内置任何数据集。旧位置参数接口保持兼容；可用 `--help` 查看所有选项。
@@ -178,7 +189,7 @@ generate_michel(input = "pmu_output/polarizationData.root",
 - 原权重满足 `a²+b²+c²=1`。对独立均匀辅助角及极化积分后，边缘密度为 `p(x)=(1+⟨Pmu⟩x/3)/2`，其中 `x=cos(theta)`。这与旧加权模型的边缘角分布期望一致，不是新物理模型。
 - 平均极化用 bin 中心和常规 bin 内容计算，与原 `GetRandom()` 的 bin 内均匀采样一致；不使用可能保留原始填充统计的 ROOT `GetMean()`。
 - 用 `TRandom3(seed)` 每事例抽一个随机数，通过稳定逆 CDF 直接得到 `cosθ`，仍实际生成指定数量的样本。使用 64 位 bin 计数器累积，避免逐事件 `TH1::Fill`。种子 0 被拒绝；相同输入、参数及 ROOT 版本可复现相同 CSV。
-- `michelData.root` 保存三个 100-bin 独立 Michel `cosθ` TH1D 和溯源对象；输入极化仍保存在上游 `polarizationData.root`。CSV 保存**无权计数及 `sqrt(count)` 误差**，不逐曲线重归一化。每条直方图的填充次数及常规 bin 积分严格等于 `eventsPerComponent`。ROOT 角度矩统计使用 bin 中心。
+- `michelData.root` 默认保存三个 100-bin 独立 Michel `cosθ` TH1D 和溯源对象；输入极化仍保存在上游 `polarizationData.root`。CSV 保存**无权计数及 `sqrt(count)` 误差**，不逐曲线重归一化。每条直方图的填充次数及常规 bin 积分严格等于 `eventsPerComponent`。ROOT 角度矩统计使用 bin 中心。
 - `michel_provenance.txt` 保存随机种子、每成分采样次数、来源映射、ROOT 版本和上游极化元数据，并明确记录 `mode=independent_components`。
 - 生成的是 **Michel 电子边缘角分布**，不包含电子能谱、空间顶点、探测器接受度或分辨率，也不保留辅助变量的联合分布。若增加这些变量或相关筛选，必须重新推导；不能直接沿用此替换。
 

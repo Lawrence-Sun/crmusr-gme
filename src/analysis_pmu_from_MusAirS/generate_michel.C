@@ -18,6 +18,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace michel_direct {
 // For p(x)=(1+k*x)/2: F(x)=(x+1)/2+k*(x*x-1)/4.
@@ -46,7 +47,7 @@ double meanPolarization(const TH1D &histogram) {
 }
 
 void run(const std::string &inputPath, const std::string &outputDirectory,
-         long long events, unsigned int seed, bool overwrite) {
+         long long events, unsigned int seed, bool overwrite, bool includeAntiMuon = false) {
     namespace fs = std::filesystem;
     if (events < 1 || events > 10000000000LL || seed == 0 || outputDirectory.empty())
         throw std::runtime_error("Require 1..10000000000 events, nonzero seed, nonempty output directory");
@@ -61,8 +62,10 @@ void run(const std::string &inputPath, const std::string &outputDirectory,
     }
     std::unique_ptr<TFile> input(TFile::Open(inputPath.c_str(), "READ"));
     if (!input || input->IsZombie()) throw std::runtime_error("Cannot open " + inputPath);
-    const std::array<std::string, 3> names = {"piMuon", "KMuon", "KLongMuon"};
-    std::array<double, 3> means;
+    std::vector<std::string> names = {"piMuon", "KMuon", "KLongMuon"};
+    if (includeAntiMuon)
+        names.insert(names.end(), {"piAntiMuon", "KAntiMuon", "KLongAntiMuon"});
+    std::vector<double> means(names.size());
     for (std::size_t i = 0; i < names.size(); ++i) {
         auto source = dynamic_cast<TH1D *>(input->Get((names[i] + "Pmu").c_str()));
         if (!source) throw std::runtime_error("Missing polarization histogram: " + names[i] + "Pmu");
@@ -71,11 +74,12 @@ void run(const std::string &inputPath, const std::string &outputDirectory,
     std::string upstream;
     if (auto source = dynamic_cast<TNamed *>(input->Get("provenance"))) upstream = source->GetTitle();
     input->Close();
-    std::array<std::unique_ptr<TH1D>, 3> histograms;
+    std::vector<std::unique_ptr<TH1D>> histograms(names.size());
     std::ostringstream provenance;
     provenance << std::setprecision(17) << "input=" << fs::absolute(inputPath).string()
                << "\nROOT=" << gROOT->GetVersion() << "\nseed=" << seed
                << "\nevents_per_component=" << events
+               << "\ninclude_antimuon=" << (includeAntiMuon ? "true" : "false")
                << "\nmode=independent_components; direct unweighted inverse-CDF sampling\n"
                << "model=p(x)=(1+mean(Pmu)*x/3)/2; x=cos(theta)\n"
                << "normalization=none; CSV y/yerr are counts/sqrt(counts), not legacy weighted Sumw2\n"
@@ -133,9 +137,10 @@ void run(const std::string &inputPath, const std::string &outputDirectory,
 void generate_michel(const char *input = "pmu_output/polarizationData.root",
                      const char *outputDirectory = "pmu_output",
                      long long eventsPerComponent = 100000000LL,
-                            unsigned int seed = 20241025, bool overwrite = false) {
+                            unsigned int seed = 20241025, bool overwrite = false,
+                     bool includeAntiMuon = false) {
     try {
-        michel_direct::run(input, outputDirectory, eventsPerComponent, seed, overwrite);
+        michel_direct::run(input, outputDirectory, eventsPerComponent, seed, overwrite, includeAntiMuon);
     } catch (const std::exception &error) {
         std::cerr << "generate_michel: " << error.what() << std::endl;
         gSystem->Exit(1);

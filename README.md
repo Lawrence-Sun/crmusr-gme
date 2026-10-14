@@ -6,6 +6,10 @@ GME代表的是米歇尔电子产生子，在确定缪子极化的情况下生�
 - lib：主要用于装载头文件 <!-- 虽然现在还有什么头文件 -->
 - src：主要用于装载源文件
 
+## 灵敏度与比例测量
+
+- [`src/sensitivity/ratio5percent/`](src/sensitivity/ratio5percent/README.md)：生成 Asimov 分布、扫描 K/π 比例并复现 `dev/2601reviseArticle/ratio5percent.ipynb` 的第二张 χ² 图（1σ 区间）。[端到端入口](src/sensitivity/ratio5percent/README.md#1-完整分析入口) 连接 MusAirS 上游，从原始数据生成模板及比例测量、纯 pion 排除两张图。
+
 ## `getMichel.cc`
 此源文件中有两个可以直接调用使用的类，分别是`getPmu`和`GenMichel`。
 
